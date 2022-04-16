@@ -1,30 +1,51 @@
 from flask import Flask, request, jsonify
+import mysql.connector
+import random
 
 app = Flask(__name__)
 
 data = {}
+required = ["game","name","score"]
 
-leaderboard = [
-    {"name":"AAG", "score":40},
-    {"name":"AAF", "score":30},
-    {"name":"AAE", "score":20},
-    {"name":"AAD", "score":20},
-    {"name":"AAC", "score":10},
-    {"name":"AAB", "score":0}
-]
-for item in leaderboard:
-    item["game"] = "swingwing"
-    item["id"] = len(data)
-    data[len(data)] = item
+def connect():
+    dataBase = mysql.connector.connect(
+      host ="assertjustice.mysql.pythonanywhere-services.com",
+      user ="assertjustice",
+      passwd ="REDACTED ;)",
+      database = "assertjustice$leaderboard"
+    )
+    # preparing a cursor object
+    cursorObject = dataBase.cursor()
+    return dataBase, cursorObject
+
+def execute(query, values = None):
+    dataBase, cursorObject = connect()
+    if not values:
+        cursorObject.execute(query)
+    else:
+        cursorObject.execute(query,values)
+    dataBase.close()
+
+def fetch(query):
+    dataBase, cursorObject = connect()
+    cursorObject.execute(query)
+    result = cursorObject.fetchall()
+    dataBase.close()
+    return result
+
+def format_entry(result):
+    id, game, name, score = result
+    return {"id": id, "game": game, "name": name, "score": score} 
 
 @app.route("/", methods=["GET"])
-def list():
+def list_data():
     game = request.args.get("game", default=None)
+    query = "SELECT * FROM ENTRIES"
     if game:
-        items = (item for item in data.values() if item["game"] == game)
-        items = sorted(items, key=lambda item: item["score"], reverse=True)
-    else:
-        items = (item for item in data.values)
+        query = f"""SELECT * FROM ENTRIES WHERE GAME = '{game}' ORDER BY SCORE;
+        """
+    result = fetch(query)
+    items = [format_entry(entry) for entry in result]
     return jsonify(items)
 
 @app.route("/", methods=["POST"])
@@ -32,10 +53,23 @@ def create():
     if not request.is_json:
         return "Request was not json", 400
     req = request.get_json()
-    id = len(data)
-    req["id"] = id
-    data[id] = req
-    return jsonify(req)
+    for r in required:
+        if r not in req:
+            return f"Request body is missing the field {r}", 400
+    query = "INSERT INTO ENTRIES (GAME, NAME, SCORE) VALUES (%s, %s, %s) SELECT * FROM ENTRIES"
+    values = (req["game"], req["name"], req["score"])
+    res = execute(query, values)
+    return jsonify(res)
 
-if __name__ == "__main__":
-    app.run()
+@app.route("/", methods=["DELETE"])
+def delete():
+    id = request.args.get("id", default=None)
+    if not id:
+        return "Request query has no id.", 400
+    item = fetch(f"SELECT * FROM ENTRIES WHERE ID = '{id}'")
+    if len(item) == 0:
+        return f"Id {id} does not exist.", 400
+    item = format_entry(item[0])
+    query = f"DELETE FROM ENTRIES WHERE ID = '{id}'"
+    execute(query)
+    return jsonify(item)
